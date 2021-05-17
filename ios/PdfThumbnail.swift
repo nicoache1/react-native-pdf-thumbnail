@@ -7,12 +7,12 @@ class PdfThumbnail: NSObject {
     static func requiresMainQueueSetup() -> Bool {
         return false
     }
-    
+
     func getCachesDirectory() -> URL {
         let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
         return paths[0]
     }
-    
+
     func getOutputFilename(filePath: String, page: Int) -> String {
         let components = filePath.components(separatedBy: "/")
         var prefix: String
@@ -25,15 +25,26 @@ class PdfThumbnail: NSObject {
         return "\(prefix)-thumbnail-\(page)-\(random).jpg"
     }
 
-    func generatePage(pdfPage: PDFPage, filePath: String, page: Int) -> Dictionary<String, Any>? {
-        let pageRect = pdfPage.bounds(for: .mediaBox)
-        let image = pdfPage.thumbnail(of: CGSize(width: pageRect.width, height: pageRect.height), for: .mediaBox)
-        let outputFile = getCachesDirectory().appendingPathComponent(getOutputFilename(filePath: filePath, page: page))
-        guard let data = image.jpegData(compressionQuality: 80) else {
-            return nil
-        }
+    func generatePage(pdfPage: PDFPage, filePath: String, pageDoc: Int) -> Dictionary<String, Any>? {
+
+        let fileUrl = URL(string: filePath)
+        guard let document = CGPDFDocument(fileUrl! as CFURL) else { return nil }
+        guard let page = document.page(at: 1) else { return nil }
+        let dpi: CGFloat = 300.0 / 72.0
+        let pageRect = page.getBoxRect(.mediaBox)
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: pageRect.size.width * dpi, height: pageRect.size.height * dpi))
+        let imageData = renderer.jpegData(withCompressionQuality: 0.8, actions: { cnv in
+                  UIColor.white.set()
+                  cnv.fill(pageRect)
+                  cnv.cgContext.translateBy(x: 0.0, y: pageRect.size.height * dpi);
+                  cnv.cgContext.scaleBy(x: dpi, y: -dpi);
+                  cnv.cgContext.drawPDFPage(page);
+
+            })
+        let outputFile = getCachesDirectory().appendingPathComponent(getOutputFilename(filePath: filePath, page: pageDoc))
         do {
-            try data.write(to: outputFile)
+            try imageData.write(to: outputFile)
             return [
                 "uri": outputFile.absoluteString,
                 "width": Int(pageRect.width),
@@ -43,7 +54,7 @@ class PdfThumbnail: NSObject {
             return nil
         }
     }
-    
+
     @available(iOS 11.0, *)
     @objc(generate:withPage:withResolver:withRejecter:)
     func generate(filePath: String, page: Int, resolve:RCTPromiseResolveBlock, reject:RCTPromiseRejectBlock) -> Void {
@@ -60,7 +71,7 @@ class PdfThumbnail: NSObject {
             return
         }
 
-        if let pageResult = generatePage(pdfPage: pdfPage, filePath: filePath, page: page) {
+        if let pageResult = generatePage(pdfPage: pdfPage, filePath: filePath, pageDoc: page) {
             resolve(pageResult)
         } else {
             reject("INTERNAL_ERROR", "Cannot write image data", nil)
@@ -85,7 +96,7 @@ class PdfThumbnail: NSObject {
                 reject("INVALID_PAGE", "Page number \(page) is invalid, file has \(pdfDocument.pageCount) pages", nil)
                 return
             }
-            if let pageResult = generatePage(pdfPage: pdfPage, filePath: filePath, page: page) {
+            if let pageResult = generatePage(pdfPage: pdfPage, filePath: filePath, pageDoc: page) {
                 result.append(pageResult)
             } else {
                 reject("INTERNAL_ERROR", "Cannot write image data", nil)
